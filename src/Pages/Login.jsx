@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../api/supabaseClient';
+
+const SYNTHETIC_DOMAINS = ['@student.com', '@supervisor.com', '@admin.com'];
 
 function Login() {
   const navigate = useNavigate();
@@ -12,9 +14,14 @@ function Login() {
   const [loading, setLoading] = useState(false);
   const [loadingDots, setLoadingDots] = useState('.');
   const [errorMessage, setErrorMessage] = useState('');
-  
+
   const [rememberMe, setRememberMe] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+
+  const [isForgotOpen, setIsForgotOpen] = useState(false);
+  const [forgotInput, setForgotInput] = useState('');
+  const [forgotStatus, setForgotStatus] = useState({ type: '', message: '' });
+  const [forgotLoading, setForgotLoading] = useState(false);
 
   useEffect(() => {
     const checkExistingSession = async () => {
@@ -29,10 +36,11 @@ function Login() {
             .eq('id', session.user.id)
             .single();
 
-          if (profile?.role === 'admin') {
+          const role = (profile?.role || '').trim().toLowerCase();
+          if (role === 'admin') {
             navigate('/admin-dashboard');
-          } else if (profile?.role === 'supervisor') {
-            navigate('/supervisor-dashboard'); 
+          } else if (role === 'supervisor' || role === 'coordinator') {
+            navigate('/coordinator-dashboard');
           } else {
             navigate('/dashboard');
           }
@@ -45,18 +53,14 @@ function Login() {
   }, [navigate]);
 
   useEffect(() => {
-    let interval;
-    if (loading) {
-      interval = setInterval(() => {
-        setLoadingDots((prev) => {
-          if (prev === '.') return '..';
-          if (prev === '..') return '...';
-          return '.';
-        });
-      }, 400);
-    } else {
-      setLoadingDots('.');
-    }
+    if (!loading) return undefined;
+    const interval = setInterval(() => {
+      setLoadingDots((prev) => {
+        if (prev === '.') return '..';
+        if (prev === '..') return '...';
+        return '.';
+      });
+    }, 400);
     return () => clearInterval(interval);
   }, [loading]);
 
@@ -70,6 +74,7 @@ function Login() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErrorMessage('');
+    setLoadingDots('.');
     setLoading(true);
 
     try {
@@ -83,10 +88,10 @@ function Login() {
         authError = res.error;
       } else {
         let res = await supabase.auth.signInWithPassword({ email: `${cleanUsername}@student.com`, password: formData.password });
-        
+
         if (res.error) {
           res = await supabase.auth.signInWithPassword({ email: `${cleanUsername}@supervisor.com`, password: formData.password });
-          
+
           if (res.error) {
             res = await supabase.auth.signInWithPassword({ email: `${cleanUsername}@admin.com`, password: formData.password });
           }
@@ -107,18 +112,57 @@ function Login() {
 
       if (profileError) throw profileError;
 
-      if (profile?.role === 'admin') {
-        navigate('/admin-dashboard'); 
-      } else if (profile?.role === 'supervisor') {
-        navigate('/supervisor-dashboard'); 
+      const role = (profile?.role || '').trim().toLowerCase();
+      if (role === 'admin') {
+        navigate('/admin-dashboard');
+      } else if (role === 'supervisor' || role === 'coordinator') {
+        navigate('/coordinator-dashboard');
       } else {
-        navigate('/dashboard'); 
+        navigate('/dashboard');
       }
 
-    } catch (error) {
+    } catch {
       setErrorMessage("Invalid username or password.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleForgotSubmit = async (e) => {
+    e.preventDefault();
+    const cleaned = forgotInput.trim().toLowerCase();
+    if (!cleaned) return;
+
+    const isSynthetic =
+      !cleaned.includes('@') || SYNTHETIC_DOMAINS.some((domain) => cleaned.endsWith(domain));
+
+    if (isSynthetic) {
+      setForgotStatus({
+        type: 'info',
+        message:
+          'School username accounts do not have an external email inbox. Please contact your OJT Coordinator or Administrator to reset your password.',
+      });
+      return;
+    }
+
+    setForgotLoading(true);
+    setForgotStatus({ type: '', message: '' });
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(cleaned, {
+        redirectTo: `${window.location.origin}/#/login`,
+      });
+      if (error) throw error;
+      setForgotStatus({
+        type: 'success',
+        message: 'If that email is registered, a password reset link has been sent.',
+      });
+    } catch (err) {
+      setForgotStatus({
+        type: 'error',
+        message: err.message || 'Unable to send password reset email.',
+      });
+    } finally {
+      setForgotLoading(false);
     }
   };
 
@@ -194,7 +238,17 @@ function Login() {
                 <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-600 cursor-pointer">Remember me</label>
               </div>
               <div className="text-sm">
-                <a href="#" className="font-bold text-green-600 hover:text-green-700 hover:underline transition-colors">Forgot password?</a>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotInput(formData.username || '');
+                    setForgotStatus({ type: '', message: '' });
+                    setIsForgotOpen(true);
+                  }}
+                  className="font-bold text-green-600 hover:text-green-700 hover:underline transition-colors cursor-pointer"
+                >
+                  Forgot password?
+                </button>
               </div>
             </div>
 
@@ -230,6 +284,66 @@ function Login() {
         </div>
       </div>
       
+      {isForgotOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full border border-gray-100">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-bold text-gray-900">Reset Password</h3>
+              <button
+                type="button"
+                onClick={() => setIsForgotOpen(false)}
+                className="text-gray-400 hover:text-gray-600 text-lg font-bold leading-none"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mb-4 leading-relaxed">
+              Enter your registered email address to receive a reset link, or enter your username for instructions.
+            </p>
+            {forgotStatus.message && (
+              <div
+                className={`mb-4 p-3 rounded text-xs font-medium border ${
+                  forgotStatus.type === 'error'
+                    ? 'bg-red-50 text-red-700 border-red-200'
+                    : forgotStatus.type === 'success'
+                      ? 'bg-green-50 text-green-700 border-green-200'
+                      : 'bg-amber-50 text-amber-800 border-amber-200'
+                }`}
+              >
+                {forgotStatus.message}
+              </div>
+            )}
+            <form onSubmit={handleForgotSubmit} className="space-y-4">
+              <input
+                type="text"
+                value={forgotInput}
+                onChange={(e) => setForgotInput(e.target.value)}
+                placeholder="Username or email"
+                required
+                className="w-full px-3.5 py-2.5 rounded border border-gray-200 focus:border-green-600 focus:ring-1 focus:ring-green-600 outline-none text-sm"
+              />
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsForgotOpen(false)}
+                  className="px-4 py-2 text-xs font-bold text-gray-600 hover:bg-gray-100 rounded-lg"
+                >
+                  Close
+                </button>
+                <button
+                  type="submit"
+                  disabled={forgotLoading}
+                  className="px-4 py-2 text-xs font-bold text-white bg-green-600 hover:bg-green-700 rounded-lg disabled:bg-gray-400"
+                >
+                  {forgotLoading ? 'Sending...' : 'Continue'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       <style>{`.animate-fade-in { animation: fadeIn 0.3s ease-in-out; } @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }`}</style>
     </div>
   );

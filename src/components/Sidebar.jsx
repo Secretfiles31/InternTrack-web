@@ -1,9 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../api/supabaseClient';
+import { getStudentThemeColors } from '../constants/departments';
+import { validateImageFile } from '../utils/fileValidation';
+import { useToast } from './common/ToastProvider';
 
 function Sidebar({ onSelectTab, activeTab, isOpen, onClose, highlightCompany }) {
   const navigate = useNavigate();
+  const toast = useToast();
   const fileInputRef = useRef(null);
   const [isUploading, setIsUploading] = useState(false);
   const [profile, setProfile] = useState({ first_name: '', last_name: '', department: '', avatar_url: '' });
@@ -36,38 +40,33 @@ function Sidebar({ onSelectTab, activeTab, isOpen, onClose, highlightCompany }) 
 
   const uploadAvatar = async (event) => {
     try {
-      setIsUploading(true);
       const file = event.target.files[0];
       if (!file) return;
+      const check = validateImageFile(file);
+      if (!check.valid) {
+        toast.error(check.error);
+        return;
+      }
+      setIsUploading(true);
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('No user logged in');
       const fileExt = file.name.split('.').pop();
-      const fileName = `${user.id}-${Math.random()}.${fileExt}`;
+      const fileName = `${user.id}/avatar-${Date.now()}.${fileExt}`;
       const { error: uploadError } = await supabase.storage.from('avatars').upload(fileName, file, { upsert: true });
       if (uploadError) throw uploadError;
       const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(fileName);
       const { error: updateError } = await supabase.from('profiles').update({ avatar_url: publicUrl }).eq('id', user.id);
       if (updateError) throw updateError;
       setProfile((prev) => ({ ...prev, avatar_url: publicUrl }));
+      toast.success('Profile photo updated.');
     } catch (error) {
-      alert('Error uploading image: ' + error.message);
+      toast.error('Error uploading image: ' + error.message);
     } finally {
       setIsUploading(false);
     }
   };
 
-  const getThemeColors = (deptCode) => {
-    switch (deptCode) {
-      case 'BSIT': return { text: 'text-purple-500', border: 'border-purple-500/50', activeTab: 'bg-purple-500/20 text-purple-400' };
-      case 'BSAB': return { text: 'text-green-500', border: 'border-green-500/50', activeTab: 'bg-green-500/20 text-green-400' };
-      case 'BSHM': return { text: 'text-yellow-500', border: 'border-yellow-500/50', activeTab: 'bg-yellow-500/20 text-yellow-400' };
-      case 'BSCRIM': return { text: 'text-rose-500', border: 'border-rose-500/50', activeTab: 'bg-rose-500/20 text-rose-400' };
-      case 'COTED': return { text: 'text-blue-500', border: 'border-blue-500/50', activeTab: 'bg-blue-500/20 text-blue-400' };
-      default: return { text: 'text-gray-400', border: 'border-gray-500/50', activeTab: 'bg-gray-500/20 text-gray-300' };
-    }
-  };
-
-  const theme = getThemeColors(profile.department);
+  const theme = getStudentThemeColors(profile.department);
   const bgSidebar = isDarkMode ? 'bg-gray-900/90 backdrop-blur-xl border border-white/10' : 'bg-white';
   const iconIdle = isDarkMode ? 'text-gray-400 hover:bg-white/10 hover:text-white' : 'text-gray-400 hover:bg-gray-50 hover:text-gray-900';
   const divider = isDarkMode ? 'bg-white/10' : 'bg-gray-100';

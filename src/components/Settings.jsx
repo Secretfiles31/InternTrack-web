@@ -1,5 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../api/supabaseClient';
+import { getStudentThemeColors } from '../constants/departments';
+import { validateImageFile } from '../utils/fileValidation';
 
 function Settings() {
   const [activeTab, setActiveTab] = useState('Profile');
@@ -9,11 +11,10 @@ function Settings() {
 
   const [userId, setUserId] = useState(null);
   const [department, setDepartment] = useState('');
-  const [profileData, setProfileData] = useState({ first_name: '', last_name: '', department: '', avatar_url: '', raw_password: '' });
+  const [profileData, setProfileData] = useState({ first_name: '', last_name: '', department: '', avatar_url: '' });
   
   const [passwordData, setPasswordData] = useState({ newPassword: '', confirmPassword: '' });
   const [showPassword, setShowPassword] = useState(false);
-  const [showCurrentPassword, setShowCurrentPassword] = useState(false); 
   
   const fileInputRef = useRef(null);
 
@@ -24,6 +25,11 @@ function Settings() {
     const handleThemeChange = () => setIsDarkMode(localStorage.getItem('theme') === 'dark');
     window.addEventListener('themeChange', handleThemeChange);
     return () => window.removeEventListener('themeChange', handleThemeChange);
+  }, []);
+
+  const showFeedback = useCallback((type, message) => {
+    setFeedback({ type, message });
+    setTimeout(() => setFeedback({ type: '', message: '' }), 4000);
   }, []);
 
   const toggleDarkMode = () => {
@@ -39,37 +45,21 @@ function Settings() {
         const { data: { user } } = await supabase.auth.getUser();
         setUserId(user.id);
         
-        const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+        const { data: profile } = await supabase.from('profiles').select('first_name, last_name, department, avatar_url').eq('id', user.id).single();
         if (profile) {
           setProfileData(profile);
           setDepartment(profile.department || ''); 
         }
-      } catch (error) {
+      } catch {
         showFeedback('error', 'Failed to load profile data.');
       } finally {
         setIsLoading(false);
       }
     };
     fetchUserData();
-  }, []);
+  }, [showFeedback]);
 
-  const showFeedback = (type, message) => {
-    setFeedback({ type, message });
-    setTimeout(() => setFeedback({ type: '', message: '' }), 4000);
-  };
-
-  const getThemeColors = (deptCode) => {
-    switch (deptCode) {
-      case 'BSIT': return { primary: 'bg-purple-600', text: 'text-purple-600', ring: 'focus:ring-purple-500' };
-      case 'BSAB': return { primary: 'bg-green-600', text: 'text-green-600', ring: 'focus:ring-green-500' };
-      case 'BSHM': return { primary: 'bg-yellow-500', text: 'text-yellow-500', ring: 'focus:ring-yellow-400' };
-      case 'BSCRIM': return { primary: 'bg-rose-700', text: 'text-rose-700', ring: 'focus:ring-rose-500' };
-      case 'COTED': return { primary: 'bg-blue-600', text: 'text-blue-600', ring: 'focus:ring-blue-500' };
-      default: return { primary: 'bg-gray-800', text: 'text-gray-800', ring: 'focus:ring-gray-500' };
-    }
-  };
-
-  const theme = getThemeColors(department);
+  const theme = getStudentThemeColors(department);
 
   // Dynamic Variables
   const textMain = isDarkMode ? 'text-white' : 'text-gray-900';
@@ -84,17 +74,26 @@ function Settings() {
 
   const handleAvatarUpload = async (event) => {
     try {
-      setIsSaving(true);
       const file = event.target.files[0];
       if (!file) return;
-      const fileName = `student-${userId}-${Math.random()}.${file.name.split('.').pop()}`;
-      await supabase.storage.from('avatars').upload(fileName, file, { upsert: true });
+      const check = validateImageFile(file);
+      if (!check.valid) {
+        showFeedback('error', check.error);
+        return;
+      }
+      setIsSaving(true);
+      const fileName = `${userId}/student-${Date.now()}.${file.name.split('.').pop()}`;
+      const { error: uploadError } = await supabase.storage.from('avatars').upload(fileName, file, { upsert: true });
+      if (uploadError) throw uploadError;
       const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(fileName);
-      await supabase.from('profiles').update({ avatar_url: publicUrl }).eq('id', userId);
-      window.location.reload();
-    } catch (error) { 
+      const { error: updateError } = await supabase.from('profiles').update({ avatar_url: publicUrl }).eq('id', userId);
+      if (updateError) throw updateError;
+      setProfileData((prev) => ({ ...prev, avatar_url: publicUrl }));
+      showFeedback('success', 'Profile picture updated!');
+    } catch { 
       showFeedback('error', 'Error uploading image.'); 
-      setIsSaving(false); 
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -102,28 +101,30 @@ function Settings() {
     e.preventDefault();
     setIsSaving(true);
     try {
-      await supabase.from('profiles').update({
+      const { error } = await supabase.from('profiles').update({
         first_name: profileData.first_name,
         last_name: profileData.last_name
       }).eq('id', userId);
-      window.location.reload();
-    } catch (error) { 
+      if (error) throw error;
+      showFeedback('success', 'Profile updated successfully!');
+    } catch { 
       showFeedback('error', 'Failed to update profile.'); 
-      setIsSaving(false); 
+    } finally {
+      setIsSaving(false);
     }
   };
 
   const savePassword = async (e) => {
     e.preventDefault();
+    if (passwordData.newPassword.length < 8) return showFeedback('error', 'Password must be at least 8 characters.');
     if (passwordData.newPassword !== passwordData.confirmPassword) return showFeedback('error', 'Passwords do not match.');
     setIsSaving(true);
     try {
-      await supabase.auth.updateUser({ password: passwordData.newPassword });
-      await supabase.from('profiles').update({ raw_password: passwordData.newPassword }).eq('id', userId);
-      setProfileData({ ...profileData, raw_password: passwordData.newPassword });
+      const { error } = await supabase.auth.updateUser({ password: passwordData.newPassword });
+      if (error) throw error;
       setPasswordData({ newPassword: '', confirmPassword: '' });
       showFeedback('success', 'Password updated successfully!');
-    } catch (error) { 
+    } catch { 
       showFeedback('error', 'Failed to update password.'); 
     } finally { 
       setIsSaving(false); 
@@ -220,20 +221,8 @@ function Settings() {
             <div className="animate-fade-in w-full">
               <h3 className={`text-lg font-bold mb-1 ${textMain}`}>Account Security</h3>
               <div className={`border-b mb-6 ${borderDivider}`}></div>
-              
-              <div className="mb-6 w-full max-w-md">
-                <label className={`block text-[12px] font-bold mb-1.5 ${textMuted}`}>Current Password</label>
-                <div className={`flex items-center justify-between px-4 py-2.5 rounded-lg border ${isDarkMode ? 'bg-black/40 border-white/10' : 'bg-gray-50 border-gray-200'}`}>
-                  <span className={`text-[13px] truncate pr-4 ${!profileData.raw_password ? 'italic opacity-70 text-amber-500 font-medium' : 'font-mono tracking-wide'} ${textMain}`}>
-                    {showCurrentPassword ? (profileData.raw_password || 'Private Password') : '••••••••••••'}
-                  </span>
-                  <button type="button" onClick={() => setShowCurrentPassword(!showCurrentPassword)} className={`shrink-0 transition-colors p-1 rounded-md ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-white/5' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-200'}`}>
-                    {showCurrentPassword ? <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" /></svg> : <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>}
-                  </button>
-                </div>
-              </div>
 
-              <form onSubmit={savePassword} className="flex flex-col gap-5 w-full max-w-md pt-4 border-t border-dashed border-gray-300/30">
+              <form onSubmit={savePassword} className="flex flex-col gap-5 w-full max-w-md">
                 <div>
                   <label className={`block text-[12px] font-bold mb-1.5 ${textMuted}`}>Change to New Password</label>
                   <div className="relative">

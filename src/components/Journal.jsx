@@ -1,8 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../api/supabaseClient';
-import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from 'docx';
+import { getStudentThemeColors } from '../constants/departments';
+import { buildWeeklyReportDocxBlob, parseJournalContent, triggerBlobDownload } from '../utils/docxGenerator';
+import { useToast } from './common/ToastProvider';
 
 function Journal() {
+  const toast = useToast();
   const [department, setDepartment] = useState('');
   const [profile, setProfile] = useState(null);
   const [savedJournals, setSavedJournals] = useState([]);
@@ -38,22 +41,6 @@ function Journal() {
     return () => window.removeEventListener('themeChange', handleThemeChange);
   }, []);
 
-  useEffect(() => { fetchProfileAndData(); }, []);
-
-  const fetchProfileAndData = async () => {
-    setIsLoading(true);
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      const { data: profileData } = await supabase.from('profiles').select('first_name, last_name, department').eq('id', user.id).single();
-      if (profileData) { setProfile(profileData); setDepartment(profileData.department); }
-      const { data: logsData } = await supabase.from('daily_logs').select('*').eq('user_id', user.id).order('date', { ascending: true });
-      if (logsData && logsData.length > 0) setWeeks(groupLogsByWeek(logsData));
-      const { data: savedData } = await supabase.from('saved_journals').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
-      setSavedJournals(savedData || []);
-    } catch (error) { console.error("Error fetching data:", error); } finally { setIsLoading(false); }
-  };
-
   const getWeekLabel = (dateObject) => {
     const dateNum = dateObject.getDate();
     const weekNum = Math.ceil(dateNum / 7);
@@ -66,7 +53,7 @@ function Journal() {
     return { label: `${weekNum}${suffix} week of ${month} ${year}`, weekNumber: weekNum.toString() };
   };
 
-  const groupLogsByWeek = (logs) => {
+  const groupLogsByWeek = useCallback((logs) => {
     const groups = {};
     logs.forEach(log => {
       const date = new Date(log.date + 'T00:00:00'); 
@@ -88,23 +75,31 @@ function Journal() {
       groups[key].logs.push(log);
     });
     return Object.values(groups).sort((a, b) => b.mondayDate - a.mondayDate);
-  };
+  }, []);
+
+  const fetchProfileAndData = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data: profileData } = await supabase.from('profiles').select('first_name, last_name, department').eq('id', user.id).single();
+      if (profileData) { setProfile(profileData); setDepartment(profileData.department); }
+      const { data: logsData } = await supabase.from('daily_logs').select('*').eq('user_id', user.id).order('date', { ascending: true });
+      if (logsData && logsData.length > 0) setWeeks(groupLogsByWeek(logsData));
+      const { data: savedData } = await supabase.from('saved_journals').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
+      setSavedJournals(savedData || []);
+    } catch (error) { console.error("Error fetching data:", error); } finally { setIsLoading(false); }
+  }, [groupLogsByWeek]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => { fetchProfileAndData(); }, 0);
+    return () => clearTimeout(timer);
+  }, [fetchProfileAndData]);
 
   const availableYears = [...new Set(weeks.map(w => w.mondayDate.getFullYear()))].sort((a, b) => b - a);
   const filteredModalWeeks = weeks.filter(week => (modalMonth === 'all' || week.mondayDate.getMonth().toString() === modalMonth) && (modalYear === 'all' || week.mondayDate.getFullYear().toString() === modalYear));
 
-  const getThemeColors = (deptCode) => {
-    switch (deptCode) {
-      case 'BSIT': return { primary: 'bg-purple-600', ring: 'focus:ring-purple-400', border: 'border-purple-500/50', text: 'text-purple-400', bgLight: 'bg-purple-500/20' };
-      case 'BSAB': return { primary: 'bg-green-600', ring: 'focus:ring-green-400', border: 'border-green-500/50', text: 'text-green-400', bgLight: 'bg-green-500/20' };
-      case 'BSHM': return { primary: 'bg-yellow-600', ring: 'focus:ring-yellow-400', border: 'border-yellow-500/50', text: 'text-yellow-400', bgLight: 'bg-yellow-500/20' };
-      case 'BSCRIM': return { primary: 'bg-rose-700', ring: 'focus:ring-rose-400', border: 'border-rose-500/50', text: 'text-rose-400', bgLight: 'bg-rose-500/20' };
-      case 'COTED': return { primary: 'bg-blue-600', ring: 'focus:ring-blue-400', border: 'border-blue-500/50', text: 'text-blue-400', bgLight: 'bg-blue-500/20' };
-      default: return { primary: 'bg-gray-700', ring: 'focus:ring-gray-400', border: 'border-gray-500/50', text: 'text-gray-300', bgLight: 'bg-gray-500/20' };
-    }
-  };
-
-  const theme = getThemeColors(department);
+  const theme = getStudentThemeColors(department);
   const bgCard = isDarkMode ? 'bg-gray-900/40 border-white/10 shadow-lg' : 'bg-white border-gray-200 shadow-sm';
   const bgHeader = isDarkMode ? 'bg-black/40 border-white/10' : 'bg-gray-50 border-gray-200';
   const bgInput = isDarkMode ? 'bg-black/40 border-white/10 text-gray-100 placeholder-gray-500' : 'bg-white border-gray-200 text-gray-900 placeholder-gray-400';
@@ -121,7 +116,27 @@ function Journal() {
       if (!weekData) throw new Error("Week data not found.");
       const { logs, dateRangeString, weekNumber } = weekData;
       
-      const prompt = `You are helping an intern compile their daily notes into a Weekly Progress Report. Read the following daily logs and write TWO paragraphs in the first person ("I"):
+      let aiGeneratedText = null;
+
+      // Prefer server-side Supabase Edge Function so GROQ_API_KEY stays off the client
+      const { data: fnData, error: fnError } = await supabase.functions.invoke('generate-journal', {
+        body: {
+          logs: logs.map((l) => ({
+            description: l.description || 'N/A',
+            learnings: l.learnings || 'N/A',
+          })),
+        },
+      });
+
+      if (!fnError && fnData && (fnData.activities || fnData.learnings)) {
+        aiGeneratedText = fnData;
+      } else {
+        const clientGroqKey = import.meta.env.VITE_GROQ_API_KEY;
+        if (!clientGroqKey) {
+          throw new Error(fnError?.message || 'AI journal generator is not configured.');
+        }
+
+        const prompt = `You are helping an intern compile their daily notes into a Weekly Progress Report. Read the following daily logs and write TWO paragraphs in the first person ("I"):
 1. A summary of the tasks and activities completed during the week.
 2. A summary of the overall skills developed and lessons learned.
 Write in simple, natural, everyday English. Make it sound human and conversational, like a real student wrote it. Do not use overly complex or formal words.
@@ -135,16 +150,17 @@ Respond strictly with a pure JSON object following this exact schema without any
   "learnings": "A single paragraph summarizing the learnings."
 }`;
 
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', { 
-        method: 'POST', 
-        headers: { 'Authorization': `Bearer ${import.meta.env.VITE_GROQ_API_KEY}`, 'Content-Type': 'application/json' }, 
-        body: JSON.stringify({ model: 'openai/gpt-oss-120b', messages: [{ role: 'user', content: prompt }], response_format: { type: "json_object" }, temperature: 0.8, max_completion_tokens: 1024, top_p: 1 }) 
-      });
-      
-      if (!response.ok) throw new Error("Failed to communicate with Groq API.");
-      const responseData = await response.json();
-      let rawContent = responseData.choices[0].message.content.replace(/```json/g, '').replace(/```/g, '').trim();
-      const aiGeneratedText = JSON.parse(rawContent);
+        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${clientGroqKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: 'openai/gpt-oss-120b', messages: [{ role: 'user', content: prompt }], response_format: { type: "json_object" }, temperature: 0.8, max_completion_tokens: 1024, top_p: 1 })
+        });
+
+        if (!response.ok) throw new Error("Failed to communicate with Groq API.");
+        const responseData = await response.json();
+        const rawContent = responseData.choices[0].message.content.replace(/```json/g, '').replace(/```/g, '').trim();
+        aiGeneratedText = JSON.parse(rawContent);
+      }
       
       setGeneratedReport({ 
         weekNumber: weekNumber, 
@@ -154,7 +170,7 @@ Respond strictly with a pure JSON object following this exact schema without any
       });
       setCustomFileName(`Weekly_Report_Week_${weekNumber}`);
       setEditingJournal(null); setDocumentMode('create'); setIsGenerateModalOpen(false); setIsResultModalOpen(true);
-    } catch (error) { alert(`AI Error: ${error.message}`); } finally { setIsGenerating(false); }
+    } catch (error) { toast.error(`AI Error: ${error.message}`); } finally { setIsGenerating(false); }
   };
 
   const handleOpenDocument = async (journal, mode) => {
@@ -179,11 +195,11 @@ Respond strictly with a pure JSON object following this exact schema without any
         headings.forEach(h => { 
           if (h.textContent.includes('Activities')) { 
             let nextEl = h.nextElementSibling; 
-            if (nextEl && nextEl.tagName === 'P') activitiesText = nextEl.innerHTML.replace(/<br\s*[\/]?>/gi, '\n').trim(); 
+            if (nextEl && nextEl.tagName === 'P') activitiesText = nextEl.innerHTML.replace(/<br\s*[/]?>/gi, '\n').trim(); 
           }
           if (h.textContent.includes('Learning Experience')) { 
             let nextEl = h.nextElementSibling; 
-            if (nextEl && nextEl.tagName === 'P') learningsText = nextEl.innerHTML.replace(/<br\s*[\/]?>/gi, '\n').trim(); 
+            if (nextEl && nextEl.tagName === 'P') learningsText = nextEl.innerHTML.replace(/<br\s*[/]?>/gi, '\n').trim(); 
           } 
         });
       }
@@ -191,7 +207,7 @@ Respond strictly with a pure JSON object following this exact schema without any
       setGeneratedReport({ weekNumber: journal.week_number, inclusiveDates: journal.inclusive_dates, activities: activitiesText, learnings: learningsText });
       setCustomFileName(journal.file_name.replace(/\.(json|docx|doc)$/i, ''));
       setEditingJournal(journal); setDocumentMode(mode); setIsResultModalOpen(true);
-    } catch (error) { alert("Failed to load document."); } finally { setIsFetchingFile(false); }
+    } catch { toast.error("Failed to load document."); } finally { setIsFetchingFile(false); }
   };
 
   const handleSaveToSupabase = async () => {
@@ -224,96 +240,28 @@ Respond strictly with a pure JSON object following this exact schema without any
       } else {
         await supabase.from('saved_journals').insert([{ user_id: user.id, week_number: generatedReport.weekNumber, inclusive_dates: generatedReport.inclusiveDates, file_name: finalFileName, file_path: filePath }]);
       }
-      setIsSaveModalOpen(false); setIsResultModalOpen(false); fetchProfileAndData(); 
-    } catch (error) { alert('Failed to save file: ' + error.message); } finally { setIsSaving(false); }
+      setIsSaveModalOpen(false); setIsResultModalOpen(false); fetchProfileAndData(); toast.success('Weekly journal saved.');
+    } catch (error) { toast.error('Failed to save file: ' + error.message); } finally { setIsSaving(false); }
   };
 
   const handleDownload = async (journal) => {
     try {
       const { data, error } = await supabase.storage.from('journals').download(journal.file_path);
       if (error) throw error;
-      
-      let reportData = { weekNumber: '', inclusiveDates: '', activities: '', learnings: '', firstName: profile?.first_name || '', lastName: profile?.last_name || '' };
+
       const text = await data.text();
-
-      if (journal.file_name.endsWith('.json')) {
-        reportData = { ...reportData, ...JSON.parse(text) };
-      } else {
-        const parser = new DOMParser();
-        const docParser = parser.parseFromString(text, 'text/html');
-        const headings = docParser.querySelectorAll('h3');
-        headings.forEach(h => { 
-          if (h.textContent.includes('Activities')) { 
-            let nextEl = h.nextElementSibling; 
-            if (nextEl && nextEl.tagName === 'P') reportData.activities = nextEl.textContent.trim(); 
-          }
-          if (h.textContent.includes('Learning Experience')) { 
-            let nextEl = h.nextElementSibling; 
-            if (nextEl && nextEl.tagName === 'P') reportData.learnings = nextEl.textContent.trim(); 
-          } 
-        });
-        reportData.weekNumber = journal.week_number;
-        reportData.inclusiveDates = journal.inclusive_dates;
-      }
-
-      const createParagraphs = (textStr) => {
-          if (!textStr) return [new Paragraph({ text: "" })];
-          return textStr.split('\n').map(line => new Paragraph({ text: line, indent: { firstLine: 720 }, spacing: { after: 120 } }));
-      };
-
-      const doc = new Document({
-        creator: "InternTrack",
-        title: `Weekly Report - Week ${reportData.weekNumber}`,
-        sections: [{
-          properties: {},
-          children: [
-            new Paragraph({
-              text: "WEEKLY PROGRESS REPORT",
-              alignment: AlignmentType.CENTER,
-              heading: HeadingLevel.HEADING_2,
-            }),
-            new Paragraph({ text: "" }), 
-            new Paragraph({
-              children: [
-                new TextRun({ text: "Student's Name: ", bold: true }),
-                new TextRun(`${reportData.firstName} ${reportData.lastName}`),
-              ]
-            }),
-            new Paragraph({
-              children: [
-                new TextRun({ text: "Week #: ", bold: true }),
-                new TextRun(`${reportData.weekNumber}`),
-                new TextRun({ text: "    Inclusive Dates: ", bold: true }),
-                new TextRun(`${reportData.inclusiveDates}`),
-              ]
-            }),
-            new Paragraph({ text: "" }), 
-            new Paragraph({
-              children: [new TextRun({ text: "Activities:", bold: true, size: 24 })],
-              spacing: { before: 240, after: 120 }
-            }),
-            ...createParagraphs(reportData.activities),
-            new Paragraph({
-              children: [new TextRun({ text: "Learning Experience:", bold: true, size: 24 })],
-              spacing: { before: 240, after: 120 }
-            }),
-            ...createParagraphs(reportData.learnings)
-          ]
-        }]
+      const reportData = parseJournalContent(text, {
+        weekNumber: journal.week_number,
+        inclusiveDates: journal.inclusive_dates,
+        fileName: journal.file_name,
+        firstName: profile?.first_name || '',
+        lastName: profile?.last_name || '',
       });
 
-      const blob = await Packer.toBlob(doc);
+      const blob = await buildWeeklyReportDocxBlob(reportData);
       const dlName = journal.file_name.replace(/\.(json|doc|docx)$/i, '') + '.docx';
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = dlName;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-      
-    } catch (error) { alert('Failed to download file: ' + error.message); }
+      triggerBlobDownload(blob, dlName);
+    } catch (error) { toast.error('Failed to download file: ' + error.message); }
   };
 
   const confirmDelete = async () => {
@@ -323,7 +271,7 @@ Respond strictly with a pure JSON object following this exact schema without any
       await supabase.from('saved_journals').delete().eq('id', journalToDelete.id);
       setSavedJournals(savedJournals.filter(item => item.id !== journalToDelete.id));
       setIsDeleteModalOpen(false); setJournalToDelete(null);
-    } catch (error) { alert('Failed to delete report.'); } finally { setIsDeleting(false); }
+    } catch { toast.error('Failed to delete report.'); } finally { setIsDeleting(false); }
   };
 
   const openGenerateModal = () => { setModalMonth(new Date().getMonth().toString()); setModalYear(new Date().getFullYear().toString()); setSelectedWeekId(''); setIsGenerateModalOpen(true); };

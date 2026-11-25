@@ -1,7 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../api/supabaseClient';
+import { getStudentThemeColors } from '../constants/departments';
+import { buildWeeklyReportDocxBlob, parseJournalContent, triggerBlobDownload } from '../utils/docxGenerator';
+import { useToast } from './common/ToastProvider';
 
 function Logs() {
+  const toast = useToast();
   const [department, setDepartment] = useState('');
   const [profile, setProfile] = useState(null);
   const [activities, setActivities] = useState([]);
@@ -23,11 +27,7 @@ function Logs() {
     return () => window.removeEventListener('themeChange', handleThemeChange);
   }, []);
 
-  useEffect(() => {
-    fetchAllActivities();
-  }, []);
-
-  const fetchAllActivities = async () => {
+  const fetchAllActivities = useCallback(async () => {
     setIsLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -75,20 +75,14 @@ function Logs() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
-  const getThemeColors = (deptCode) => {
-    switch (deptCode) {
-      case 'BSIT': return { primary: 'bg-purple-600', text: 'text-purple-400', border: 'border-purple-500/30', bgLight: 'bg-purple-500/20', ring: 'focus:ring-purple-400 focus:border-purple-400' };
-      case 'BSAB': return { primary: 'bg-green-600', text: 'text-green-400', border: 'border-green-500/30', bgLight: 'bg-green-500/20', ring: 'focus:ring-green-400 focus:border-green-400' };
-      case 'BSHM': return { primary: 'bg-yellow-500', text: 'text-yellow-400', border: 'border-yellow-500/30', bgLight: 'bg-yellow-500/20', ring: 'focus:ring-yellow-400 focus:border-yellow-400' };
-      case 'BSCRIM': return { primary: 'bg-rose-700', text: 'text-rose-400', border: 'border-rose-500/30', bgLight: 'bg-rose-500/20', ring: 'focus:ring-rose-400 focus:border-rose-400' };
-      case 'COTED': return { primary: 'bg-blue-600', text: 'text-blue-400', border: 'border-blue-500/30', bgLight: 'bg-blue-500/20', ring: 'focus:ring-blue-400 focus:border-blue-400' };
-      default: return { primary: 'bg-gray-700', text: 'text-gray-300', border: 'border-gray-500/30', bgLight: 'bg-gray-500/20', ring: 'focus:ring-gray-400 focus:border-gray-400' };
-    }
-  };
+  useEffect(() => {
+    const timer = setTimeout(() => { fetchAllActivities(); }, 0);
+    return () => clearTimeout(timer);
+  }, [fetchAllActivities]);
 
-  const theme = getThemeColors(department);
+  const theme = getStudentThemeColors(department);
   const bgCard = isDarkMode ? 'bg-gray-900/40 border-white/10 shadow-lg' : 'bg-white border-gray-200 shadow-sm';
   const bgHeader = isDarkMode ? 'bg-black/40 border-white/10' : 'bg-gray-50 border-gray-200';
   const bgInput = isDarkMode ? 'bg-black/40 border-white/10 text-gray-100 placeholder-gray-500' : 'bg-white border-gray-200 text-gray-900 placeholder-gray-400';
@@ -130,18 +124,22 @@ function Logs() {
   const handleDownload = async (item) => {
     if (item.type !== 'journal') return;
     try {
-      const { data, error } = await supabase.storage.from('journals').download(item.rawData.file_path);
+      const journal = item.rawData;
+      const { data, error } = await supabase.storage.from('journals').download(journal.file_path);
       if (error) throw error;
-      const url = window.URL.createObjectURL(data);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = item.rawData.file_name.replace(/\.json$/i, '.docx');
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
+      const text = await data.text();
+      const reportData = parseJournalContent(text, {
+        weekNumber: journal.week_number,
+        inclusiveDates: journal.inclusive_dates,
+        fileName: journal.file_name,
+        firstName: profile?.first_name || '',
+        lastName: profile?.last_name || '',
+      });
+      const blob = await buildWeeklyReportDocxBlob(reportData);
+      const dlName = journal.file_name.replace(/\.(json|doc|docx)$/i, '') + '.docx';
+      triggerBlobDownload(blob, dlName);
     } catch (error) {
-      alert('Failed to download file: ' + error.message);
+      toast.error('Failed to download file: ' + error.message);
     }
   };
 
@@ -174,7 +172,7 @@ function Logs() {
             if (cells.length >= 2) {
               extractedLogs.push({
                 date: cells[0].textContent.trim(),
-                description: cells[1].innerHTML.replace(/<br\s*[\/]?>/gi, '\n').trim()
+                description: cells[1].innerHTML.replace(/<br\s*[/]?>/gi, '\n').trim()
               });
             }
           });
@@ -185,7 +183,7 @@ function Logs() {
           if (h.textContent.includes('Learning Experience')) {
             let nextEl = h.nextElementSibling;
             if (nextEl && nextEl.tagName === 'P') {
-              learningsText = nextEl.innerHTML.replace(/<br\s*[\/]?>/gi, '\n').trim();
+              learningsText = nextEl.innerHTML.replace(/<br\s*[/]?>/gi, '\n').trim();
             }
           }
         });
@@ -203,7 +201,7 @@ function Logs() {
       });
       setModalType(targetModal);
     } catch (error) {
-      alert('Failed to load document content: ' + error.message);
+      toast.error('Failed to load document content: ' + error.message);
     } finally {
       setIsProcessing(false);
     }
@@ -225,8 +223,9 @@ function Logs() {
       if (error) throw error;
       await fetchAllActivities();
       setModalType(null);
+      toast.success('Log updated.');
     } catch (err) {
-      alert('Failed to update log: ' + err.message);
+      toast.error('Failed to update log: ' + err.message);
     } finally {
       setIsProcessing(false);
     }
@@ -277,8 +276,9 @@ function Logs() {
 
       await fetchAllActivities();
       setModalType(null);
+      toast.success('Journal updated.');
     } catch (error) {
-      alert('Failed to save document: ' + error.message);
+      toast.error('Failed to save document: ' + error.message);
     } finally {
       setIsProcessing(false);
     }

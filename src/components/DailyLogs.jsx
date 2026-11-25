@@ -1,7 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../api/supabaseClient';
+import { getStudentThemeColors } from '../constants/departments';
+import { validateImageFile } from '../utils/fileValidation';
+import { useToast } from './common/ToastProvider';
 
 function DailyLogs() {
+  const toast = useToast();
   const [logs, setLogs] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [department, setDepartment] = useState(''); 
@@ -25,9 +29,7 @@ function DailyLogs() {
     return () => window.removeEventListener('themeChange', handleThemeChange);
   }, []);
 
-  useEffect(() => { fetchLogs(); }, []);
-
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     setIsLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -39,20 +41,14 @@ function DailyLogs() {
         setLogs(data || []);
       }
     } catch (error) { console.error('Error fetching logs:', error.message); } finally { setIsLoading(false); }
-  };
+  }, []);
 
-  const getThemeColors = (deptCode) => {
-    switch (deptCode) {
-      case 'BSIT': return { primary: 'bg-purple-600', ring: 'focus:ring-purple-400 focus:border-purple-400', spinner: 'border-t-purple-500', text: 'text-purple-400' };
-      case 'BSAB': return { primary: 'bg-green-600', ring: 'focus:ring-green-400 focus:border-green-400', spinner: 'border-t-green-500', text: 'text-green-400' };
-      case 'BSHM': return { primary: 'bg-yellow-600', ring: 'focus:ring-yellow-400 focus:border-yellow-400', spinner: 'border-t-yellow-500', text: 'text-yellow-400' };
-      case 'BSCRIM': return { primary: 'bg-rose-700', ring: 'focus:ring-rose-400 focus:border-rose-400', spinner: 'border-t-rose-500', text: 'text-rose-400' };
-      case 'COTED': return { primary: 'bg-blue-600', ring: 'focus:ring-blue-400 focus:border-blue-400', spinner: 'border-t-blue-500', text: 'text-blue-400' };
-      default: return { primary: 'bg-gray-700', ring: 'focus:ring-gray-400 focus:border-gray-400', spinner: 'border-t-gray-500', text: 'text-gray-400' };
-    }
-  };
+  useEffect(() => {
+    const timer = setTimeout(() => { fetchLogs(); }, 0);
+    return () => clearTimeout(timer);
+  }, [fetchLogs]);
 
-  const theme = getThemeColors(department);
+  const theme = getStudentThemeColors(department);
   const bgCard = isDarkMode ? 'bg-gray-900/40 border-white/10 shadow-lg' : 'bg-white border-gray-200 shadow-sm';
   const bgHeader = isDarkMode ? 'bg-black/40 border-white/10' : 'bg-gray-50 border-gray-200';
   const bgInput = isDarkMode ? 'bg-black/40 border-white/10 text-gray-100 placeholder-gray-500' : 'bg-white border-gray-200 text-gray-900 placeholder-gray-400';
@@ -109,7 +105,14 @@ function DailyLogs() {
 
   const handleFileChange = (e) => {
     if (e.target.files && e.target.files[0]) {
-      setProofFile(e.target.files[0]);
+      const file = e.target.files[0];
+      const check = validateImageFile(file);
+      if (!check.valid) {
+        toast.error(check.error);
+        e.target.value = '';
+        return;
+      }
+      setProofFile(file);
     }
   };
 
@@ -124,7 +127,7 @@ function DailyLogs() {
 
       if (proofFile) {
         const fileExt = proofFile.name.split('.').pop();
-        const fileName = `${user.id}-${Date.now()}.${fileExt}`;
+        const fileName = `${user.id}/${Date.now()}.${fileExt}`;
         
         const { error: uploadError } = await supabase.storage.from('logpicture').upload(fileName, proofFile, { upsert: true });
         if (uploadError) throw uploadError;
@@ -150,8 +153,9 @@ function DailyLogs() {
       
       await fetchLogs();
       closeModal();
+      toast.success(modalMode === 'add' ? 'Daily log saved.' : 'Daily log updated.');
     } catch (error) { 
-      alert('Failed to save log: ' + error.message); 
+      toast.error('Failed to save log: ' + error.message); 
     } finally { 
       setIsSubmitting(false); 
     }
@@ -163,7 +167,8 @@ function DailyLogs() {
       await supabase.from('daily_logs').delete().eq('id', activeLogId);
       setLogs(logs.filter(log => log.id !== activeLogId));
       closeModal();
-    } catch (error) { alert('Failed to delete: ' + error.message); } finally { setIsSubmitting(false); }
+      toast.success('Daily log deleted.');
+    } catch (error) { toast.error('Failed to delete: ' + error.message); } finally { setIsSubmitting(false); }
   };
 
   const filteredLogs = logs.filter(log => {

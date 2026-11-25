@@ -1,11 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../api/supabaseClient';
+import { getStudentThemeColors } from '../constants/departments';
+import { useToast } from './common/ToastProvider';
 
 function Company() {
+  const toast = useToast();
   const [department, setDepartment] = useState('');
   const [profile, setProfile] = useState(null);
   const [companies, setCompanies] = useState([]);
-  const [supervisors, setSupervisors] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   
@@ -27,10 +29,6 @@ function Company() {
     return () => window.removeEventListener('themeChange', handleThemeChange);
   }, []);
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
   // Helper to parse "9h 30m" into a decimal number (9.5)
   const parseHoursToDecimal = (timeStr) => {
     if (!timeStr) return 0;
@@ -42,7 +40,7 @@ function Company() {
     return h + (m / 60);
   };
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -75,8 +73,6 @@ function Company() {
       if (userDept) supQuery = supQuery.eq('department', userDept);
       const { data: supervisorsData } = await supQuery;
 
-      setSupervisors(supervisorsData || []);
-
       const formattedCompanies = (companiesData || []).map(comp => {
         // Count both active and pending students to prevent over-requesting slots
         const assignedCount = (studentsData || []).filter(s => String(s.company_id) === String(comp.id)).length;
@@ -102,20 +98,14 @@ function Company() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
-  const getThemeColors = (deptCode) => {
-    switch (deptCode) {
-      case 'BSIT': return { primary: 'bg-purple-600', text: 'text-purple-400', border: 'border-purple-500/30', bgLight: 'bg-purple-500/20', ring: 'focus:ring-purple-500' };
-      case 'BSAB': return { primary: 'bg-green-600', text: 'text-green-400', border: 'border-green-500/30', bgLight: 'bg-green-500/20', ring: 'focus:ring-green-500' };
-      case 'BSHM': return { primary: 'bg-yellow-500', text: 'text-yellow-400', border: 'border-yellow-500/30', bgLight: 'bg-yellow-500/20', ring: 'focus:ring-yellow-400' };
-      case 'BSCRIM': return { primary: 'bg-rose-700', text: 'text-rose-400', border: 'border-rose-500/30', bgLight: 'bg-rose-500/20', ring: 'focus:ring-rose-500' };
-      case 'COTED': return { primary: 'bg-blue-600', text: 'text-blue-400', border: 'border-blue-500/30', bgLight: 'bg-blue-500/20', ring: 'focus:ring-blue-500' };
-      default: return { primary: 'bg-gray-700', text: 'text-gray-300', border: 'border-gray-500/30', bgLight: 'bg-gray-500/20', ring: 'focus:ring-gray-500' };
-    }
-  };
+  useEffect(() => {
+    const timer = setTimeout(() => { fetchData(); }, 0);
+    return () => clearTimeout(timer);
+  }, [fetchData]);
 
-  const theme = getThemeColors(department);
+  const theme = getStudentThemeColors(department);
   const bgCard = isDarkMode ? 'bg-gray-900/40 border-white/10 shadow-lg' : 'bg-white border-gray-200 shadow-sm';
   const bgHeader = isDarkMode ? 'bg-black/40 border-white/10' : 'bg-gray-50 border-gray-200';
   const bgInput = isDarkMode ? 'bg-black/40 border-white/10 text-gray-100 placeholder-gray-500' : 'bg-white border-gray-200 text-gray-900 placeholder-gray-400';
@@ -136,8 +126,9 @@ function Company() {
       
       await fetchData();
       setIsConfirmModalOpen(false);
+      toast.success('Deployment request submitted.');
     } catch (error) {
-      alert("Failed to request company: " + error.message);
+      toast.error("Failed to request company: " + error.message);
     } finally {
       setIsSubmitting(false);
     }

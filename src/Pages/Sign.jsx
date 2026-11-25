@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../api/supabaseClient';
+import { DEPARTMENT_OPTIONS } from '../constants/departments';
 
 function Sign() {
   const navigate = useNavigate();
@@ -31,26 +32,17 @@ function Sign() {
     symbol: false,
   });
 
-  const departmentOptions = [
-    { value: 'BSIT', label: 'Bachelor of Science in Information Technology', logo: '/ccs.png' },
-    { value: 'BSHM', label: 'Bachelor of Science in Hospitality Management', logo: '/hm.png' },
-    { value: 'BSCRIM', label: 'Bachelor of Science in Criminology', logo: '/crim.png' },
-    { value: 'BSAB', label: 'Bachelor of Science in Agribusiness', logo: '/agri.png' },
-  ];
+  const departmentOptions = DEPARTMENT_OPTIONS;
 
   useEffect(() => {
-    let interval;
-    if (loading) {
-      interval = setInterval(() => {
-        setLoadingDots((prev) => {
-          if (prev === '.') return '..';
-          if (prev === '..') return '...';
-          return '.';
-        });
-      }, 400);
-    } else {
-      setLoadingDots('.');
-    }
+    if (!loading) return undefined;
+    const interval = setInterval(() => {
+      setLoadingDots((prev) => {
+        if (prev === '.') return '..';
+        if (prev === '..') return '...';
+        return '.';
+      });
+    }, 400);
     return () => clearInterval(interval);
   }, [loading]);
 
@@ -105,6 +97,7 @@ function Sign() {
       return;
     }
 
+    setLoadingDots('.');
     setLoading(true);
 
     try {

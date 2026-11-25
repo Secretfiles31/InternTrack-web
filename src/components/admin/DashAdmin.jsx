@@ -1,31 +1,66 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../api/supabaseClient';
 import AdminSidebar from './AdminSidebar';
 
-import Overview from './Overview'; 
+import Overview from './Overview';
 import AddStudent from './AddStudent';
-import AddSupervisor from './AddSupervisor'; // <--- Import the new component
-import Company from './Company'; 
-import StudentReports from './StudentReports'; 
-import Settings from './Settings'; 
+import AddSupervisor from './AddSupervisor';
+import Company from './Company';
+import StudentReports from './StudentReports';
+import InternMonitor from './InternMonitor';
+import AnnouncementsManager from '../shared/AnnouncementsManager';
+import Settings from './Settings';
+
+const PAGE_TITLES = {
+  Dashboard: 'Dashboard',
+  'Add Student': 'Students',
+  'Add Supervisor': 'OJT Coordinators',
+  'Add Company': 'Partner Companies',
+  'Intern Monitor': 'Intern Monitor',
+  'Student Report': 'Progress Reports',
+  Announcements: 'Announcements',
+  Settings: 'Settings',
+};
 
 function DashAdmin() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('Dashboard');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  const activeTab = PAGE_TITLES[tabParam] ? tabParam : 'Dashboard';
+  const setActiveTab = (tab) => {
+    setSearchParams(tab === 'Dashboard' ? {} : { tab });
+  };
   const [isMobileOpen, setIsMobileOpen] = useState(false);
-  
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [authLoading, setAuthLoading] = useState(true);
-  const [profile, setProfile] = useState({ first_name: '', last_name: '', department: '', role: '' });
+  const [monitorFilter, setMonitorFilter] = useState('all');
+  const [reportSearch, setReportSearch] = useState('');
 
-  // GLOBAL DARK MODE LISTENER
-  const [isDarkMode, setIsDarkMode] = useState(localStorage.getItem('theme') === 'dark');
+  // onNavigate(tab) or onNavigate(tab, { filter }) - used by dashboard shortcuts
+  const handleNavigate = (tab, opts = {}) => {
+    if (tab === 'Intern Monitor') setMonitorFilter(opts.filter || 'all');
+    if (tab === 'Student Report') setReportSearch(opts.search || '');
+    setActiveTab(tab);
+  };
+  const [authLoading, setAuthLoading] = useState(true);
+  const [profile, setProfile] = useState({ first_name: '', last_name: '', department: '', role: '', avatar_url: '' });
 
   useEffect(() => {
-    const handleThemeChange = () => setIsDarkMode(localStorage.getItem('theme') === 'dark');
-    window.addEventListener('themeChange', handleThemeChange);
-    return () => window.removeEventListener('themeChange', handleThemeChange);
+    document.documentElement.classList.remove('dark');
+  }, []);
+
+  // Text size chosen in Settings > Appearance (small / normal / large)
+  useEffect(() => {
+    const SIZES = { small: '14px', normal: '16px', large: '18px' };
+    const apply = () => {
+      const size = localStorage.getItem('adminTextSize') || 'normal';
+      document.documentElement.style.fontSize = SIZES[size] || SIZES.normal;
+    };
+    apply();
+    window.addEventListener('textSizeChange', apply);
+    return () => {
+      window.removeEventListener('textSizeChange', apply);
+      document.documentElement.style.fontSize = '';
+    };
   }, []);
 
   useEffect(() => {
@@ -36,7 +71,6 @@ function DashAdmin() {
         if (data) {
           if (data.role !== 'admin') { navigate('/dashboard'); return; }
           setProfile(data);
-          setIsAuthenticated(true);
         }
       } else {
         navigate('/login');
@@ -46,62 +80,82 @@ function DashAdmin() {
     checkAuthAndFetchProfile();
   }, [navigate]);
 
-  const getGradientByDepartment = (deptCode) => {
-    switch (deptCode) {
-      case 'BSIT': return 'bg-gradient-to-br from-purple-600 to-purple-900';
-      case 'BSAB': return 'bg-gradient-to-br from-green-600 to-green-900';
-      case 'BSHM': return 'bg-gradient-to-br from-yellow-500 to-yellow-700'; 
-      case 'BSCRIM': return 'bg-gradient-to-br from-rose-800 to-rose-950'; 
-      case 'COTED': return 'bg-gradient-to-br from-blue-600 to-blue-900';
-      default: return 'bg-gradient-to-br from-gray-700 to-gray-900'; 
-    }
-  };
+  const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 
   return (
-    <div className={`w-screen h-screen ${getGradientByDepartment(profile.department)} overflow-hidden font-sans relative transition-colors duration-500`}>
-      
-      <div className="absolute top-0 left-0 w-full h-14 flex items-center justify-between px-4 md:px-6 z-40 select-none">
-        <div className="flex items-center gap-3 text-white/95 drop-shadow-sm">
-          <button onClick={() => setIsMobileOpen(true)} className="md:hidden p-1.5 rounded-lg hover:bg-white/20 transition-colors">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" /></svg>
-          </button>
-          <span className="font-extrabold tracking-wide text-[15px] uppercase mt-0.5 flex items-center gap-2">
-            InternTrack <span className="bg-white text-gray-900 text-[10px] px-2.5 py-0.5 rounded-md font-black tracking-widest shadow-sm">ADMIN</span>
-          </span>
-        </div>
-        {!authLoading && isAuthenticated && profile.first_name && (
-          <div className="flex items-center gap-3 animate-fade-in mr-2">
-            <span className="text-sm font-medium tracking-wide hidden sm:block drop-shadow-sm text-white">
-              Welcome, <span className="font-extrabold text-amber-400">{profile.first_name} {profile.last_name}</span>
-            </span>
+    <div className="w-screen h-screen overflow-hidden flex font-sans bg-slate-50 text-slate-900">
+      <AdminSidebar
+        activeTab={activeTab}
+        onSelectTab={(t) => { setActiveTab(t); setIsMobileOpen(false); }}
+        isOpen={isMobileOpen}
+        onClose={() => setIsMobileOpen(false)}
+        profile={profile}
+      />
+
+      <div className="flex-1 h-screen flex flex-col overflow-hidden relative min-w-0">
+        <header className="h-14 px-4 md:px-8 border-b border-slate-200 bg-white shrink-0 flex items-center justify-between z-30">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsMobileOpen(!isMobileOpen)}
+              className="md:hidden p-1.5 rounded-md text-slate-500 hover:text-slate-800 hover:bg-slate-100"
+              aria-label="Toggle menu"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+            <h1 className="text-[15px] font-semibold text-slate-900">{PAGE_TITLES[activeTab] || activeTab}</h1>
           </div>
-        )}
-      </div>
 
-      <AdminSidebar activeTab={activeTab} onSelectTab={(t) => { setActiveTab(t); setIsMobileOpen(false); }} isOpen={isMobileOpen} onClose={() => setIsMobileOpen(false)} />
+          <div className="flex items-center gap-4">
+            <span className="hidden lg:inline text-xs text-slate-500">{today}</span>
+            <button
+              onClick={() => setActiveTab('Settings')}
+              className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-slate-100 transition-colors"
+            >
+              {profile.avatar_url ? (
+                <img src={profile.avatar_url} alt="" className="w-7 h-7 rounded-full object-cover" />
+              ) : (
+                <div className="w-7 h-7 rounded-full bg-slate-200 text-slate-700 text-xs font-semibold flex items-center justify-center">
+                  {(profile.first_name || 'A').charAt(0)}
+                </div>
+              )}
+              <span className="hidden sm:inline text-[13px] font-medium text-slate-700">
+                {profile.first_name ? `${profile.first_name} ${profile.last_name || ''}` : 'Administrator'}
+              </span>
+            </button>
+          </div>
+        </header>
 
-      {/* DYNAMIC MAIN CONTENT BOX (Switches to Dark Glassmorphism) */}
-      <div className={`absolute top-14 bottom-4 left-4 md:left-[104px] right-4 rounded-[24px] shadow-2xl shadow-black/20 flex flex-col overflow-hidden animate-fade-in transition-all duration-300 ${isDarkMode ? 'bg-gray-900/70 backdrop-blur-xl border border-white/10' : 'bg-white'}`}>
-        <main className="flex-1 overflow-y-auto relative">
-          
+        <main className="flex-1 overflow-y-auto custom-scrollbar relative">
           {authLoading && (
-            <div className={`absolute inset-0 z-50 flex items-center justify-center ${isDarkMode ? 'bg-black/50 backdrop-blur-sm' : 'bg-white/80 backdrop-blur-sm'}`}>
-              <div className="w-8 h-8 border-4 border-gray-200 border-t-gray-800 rounded-full animate-spin"></div>
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-white/80">
+              <div className="w-7 h-7 border-2 border-slate-200 border-t-emerald-600 rounded-full animate-spin" />
             </div>
           )}
 
           <div className="h-full w-full">
-            {activeTab === 'Dashboard' && <Overview />}
-            {activeTab === 'Add Student' && <AddStudent />}
-            {activeTab === 'Add Supervisor' && <AddSupervisor />} {/* Render the new component */}
-            {activeTab === 'Add Company' && <Company />}
-            {activeTab === 'Student Report' && <StudentReports />}
-            {activeTab === 'Settings' && <Settings />}
+            {activeTab === 'Dashboard' && <Overview onNavigate={handleNavigate} />}
+            {activeTab === 'Add Student' && <AddStudent onNavigate={setActiveTab} />}
+            {activeTab === 'Add Supervisor' && <AddSupervisor onNavigate={setActiveTab} />}
+            {activeTab === 'Add Company' && <Company onNavigate={setActiveTab} />}
+            {activeTab === 'Intern Monitor' && <InternMonitor onNavigate={handleNavigate} initialFilter={monitorFilter} />}
+            {activeTab === 'Student Report' && <StudentReports onNavigate={handleNavigate} initialSearch={reportSearch} />}
+            {activeTab === 'Announcements' && <AnnouncementsManager onNavigate={handleNavigate} mode="admin" />}
+            {activeTab === 'Settings' && <Settings onNavigate={setActiveTab} />}
           </div>
         </main>
       </div>
 
-      <style>{`.animate-fade-in { animation: fadeIn 0.3s ease-out; } @keyframes fadeIn { from { opacity: 0; transform: scale(0.98) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }`}</style>
+      <style>{`
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: rgba(100,116,139,0.25); border-radius: 9999px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background-color: rgba(100,116,139,0.45); }
+        .animate-fade-in { animation: fadeIn 0.15s ease-out; }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+      `}</style>
     </div>
   );
 }

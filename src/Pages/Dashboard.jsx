@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../api/supabaseClient';
 import Sidebar from '../components/Sidebar';
+import { getDepartmentGradient } from '../constants/departments';
 
 // Important Components
 import StudentOverview from '../components/StudentOverview'; 
@@ -11,9 +12,16 @@ import Logs from '../components/Logs';
 import Company from '../components/Company'; 
 import Settings from '../components/Settings';
 
+const VALID_TABS = new Set(['Dashboard', 'Company', 'Daily Logs', 'Journal', 'Logs', 'Settings']);
+
 function Dashboard() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('Dashboard');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  const activeTab = VALID_TABS.has(tabParam) ? tabParam : 'Dashboard';
+  const setActiveTab = (tab) => {
+    setSearchParams(tab === 'Dashboard' ? {} : { tab });
+  };
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
@@ -34,27 +42,35 @@ function Dashboard() {
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         setIsAuthenticated(true);
-        // FETCH company_status AS WELL to check if they are waiting for approval
-        const { data } = await supabase.from('profiles').select('first_name, last_name, department, company_id, company_status').eq('id', session.user.id).single();
-        if (data) setProfile(data);
+        // Fetch role and company_status to enforce student access and pending state
+        const { data } = await supabase
+          .from('profiles')
+          .select('first_name, last_name, department, role, company_id, company_status')
+          .eq('id', session.user.id)
+          .single();
+        if (data) {
+          const role = (data.role || '').trim().toLowerCase();
+          if (role === 'admin') {
+            navigate('/admin-dashboard', { replace: true });
+            return;
+          }
+          if (role === 'supervisor' || role === 'coordinator') {
+            navigate('/coordinator-dashboard', { replace: true });
+            return;
+          }
+          setProfile(data);
+        }
       } else {
         setIsAuthenticated(false);
+        navigate('/login', { replace: true });
+        return;
       }
       setAuthLoading(false);
     };
     checkAuthAndFetchProfile();
-  }, []);
+  }, [navigate]);
 
-  const getGradientByDepartment = (deptCode) => {
-    switch (deptCode) {
-      case 'BSIT': return 'bg-gradient-to-br from-purple-600 to-purple-900';
-      case 'BSAB': return 'bg-gradient-to-br from-green-600 to-green-900';
-      case 'BSHM': return 'bg-gradient-to-br from-yellow-500 to-yellow-700'; 
-      case 'BSCRIM': return 'bg-gradient-to-br from-rose-800 to-rose-950';
-      case 'COTED': return 'bg-gradient-to-br from-blue-600 to-blue-900';
-      default: return 'bg-gradient-to-br from-gray-700 to-gray-900';
-    }
-  };
+  const getGradientByDepartment = getDepartmentGradient;
 
   // CHECK IF WE NEED TO SHOW THE ONBOARDING SPOTLIGHT (Strictly hide it if pending!)
   const showTutorial = !authLoading && isAuthenticated && profile && profile.company_id === null && profile.company_status !== 'pending' && activeTab !== 'Company';
