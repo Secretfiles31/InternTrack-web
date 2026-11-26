@@ -6,6 +6,28 @@ export const DEPARTMENT_OPTIONS = [
   { value: 'COTED', shortLabel: 'COTED', label: 'College of Teacher Education', logo: '/educ.png' },
 ];
 
+const DEPT_ALIASES = {
+  BSIT: ['BSIT', 'IT'],
+  BSHM: ['BSHM', 'HM'],
+  BSCRIM: ['BSCRIM', 'CRIM'],
+  BSAB: ['BSAB', 'BSAGRI', 'AGRE', 'AGRI'],
+  COTED: ['COTED', 'EDUC', 'BSED', 'BEED'],
+};
+
+export const getNormalizedDeptCode = (value) => {
+  const v = (value || '').trim().toUpperCase();
+  if (!v) return '';
+  const matched = Object.keys(DEPT_ALIASES).find((code) => DEPT_ALIASES[code].includes(v));
+  return matched || v;
+};
+
+export const matchesDepartment = (valueA, valueB) => {
+  const a = getNormalizedDeptCode(valueA);
+  const b = getNormalizedDeptCode(valueB);
+  if (!a || !b) return false;
+  return a === b;
+};
+
 export const getDepartmentGradient = (deptCode) => {
   switch (deptCode) {
     case 'BSIT':
@@ -107,7 +129,7 @@ export const getStudentThemeColors = (deptCode) => {
 };
 
 export const getDepartmentBadge = (deptCode) => {
-  switch (deptCode) {
+  switch (getNormalizedDeptCode(deptCode)) {
     case 'BSIT':
       return 'bg-purple-50 text-purple-700 border-purple-200';
     case 'BSHM':

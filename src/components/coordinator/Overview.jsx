@@ -1,22 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../api/supabaseClient';
 import { useToast } from '../common/ToastProvider';
-
-const getDeptBadge = (dept) => {
-  const d = (dept || 'BSIT').toUpperCase();
-  if (d.includes('IT')) return 'bg-purple-50 text-purple-700 border-purple-200';
-  if (d.includes('HM')) return 'bg-amber-50 text-amber-800 border-amber-200';
-  if (d.includes('CRIM')) return 'bg-rose-50 text-rose-700 border-rose-200';
-  if (d.includes('AB') || d.includes('AGRI') || d.includes('AGRE')) return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-  return 'bg-purple-50 text-purple-700 border-purple-200';
-};
+import {
+  getDepartmentBadge as getDeptBadge,
+  getNormalizedDeptCode,
+  matchesDepartment,
+} from '../../constants/departments';
 
 function Overview({ onNavigate }) {
   const toast = useToast();
   const [isLoading, setIsLoading] = useState(true);
   const [coordinatorName, setCoordinatorName] = useState('');
-  const [hasCompany, setHasCompany] = useState(true);
-  const [companyData, setCompanyData] = useState({});
+  const [department, setDepartment] = useState('');
+  const [hasDepartment, setHasDepartment] = useState(true);
   const [processingId, setProcessingId] = useState(null);
 
   // Dashboard Data States
@@ -25,6 +21,8 @@ function Overview({ onNavigate }) {
     pendingInterns: 0,
     activeInterns: 0,
     totalReports: 0,
+    totalCompanies: 0,
+    totalCapacity: 0,
   });
 
   const [chartData, setChartData] = useState([]);
@@ -41,7 +39,7 @@ function Overview({ onNavigate }) {
       // 1. Get Coordinator Profile
       const { data: coordProfile } = await supabase
         .from('profiles')
-        .select('first_name, last_name, department, company_id')
+        .select('first_name, last_name, department')
         .eq('id', user.id)
         .single();
 
@@ -50,37 +48,41 @@ function Overview({ onNavigate }) {
           setCoordinatorName(`${coordProfile.first_name} ${coordProfile.last_name || ''}`.trim());
         }
 
-        if (!coordProfile.company_id) {
-          setHasCompany(false);
+        const coordDept = getNormalizedDeptCode(coordProfile.department);
+        setDepartment(coordDept);
+
+        if (!coordDept) {
+          setHasDepartment(false);
           setIsLoading(false);
           return;
         }
 
-        const compId = coordProfile.company_id;
+        setHasDepartment(true);
 
-        // 2. Fetch Data relevant to this company
-        const [studentsRes, companyRes, reportsRes] = await Promise.all([
+        // 2. Fetch Data relevant to this coordinator's department
+        const [studentsRes, companiesRes, reportsRes] = await Promise.all([
           supabase
             .from('profiles')
             .select('id, first_name, last_name, company_id, avatar_url, company_status, department')
-            .eq('company_id', compId)
             .eq('role', 'student'),
-          supabase.from('companies').select('*').eq('id', compId).single(),
+          supabase.from('companies').select('*'),
           supabase
             .from('saved_journals')
             .select('id, user_id, week_number, file_name, created_at')
             .order('created_at', { ascending: false }),
         ]);
 
-        const students = studentsRes.data || [];
-        const companyInfo = companyRes.data || {};
+        const allCompanies = companiesRes.data || [];
+        const companyById = Object.fromEntries(allCompanies.map((c) => [String(c.id), c]));
+        const deptCompanies = allCompanies.filter((c) => matchesDepartment(c.department, coordDept));
+        const totalCapacity = deptCompanies.reduce((sum, c) => sum + (Number(c.capacity) || 0), 0);
+
+        const students = (studentsRes.data || []).filter((s) => matchesDepartment(s.department, coordDept));
         const allReports = reportsRes.data || [];
 
-        setCompanyData(companyInfo);
-
-        // Filter reports to only include this company's students
-        const studentIds = students.map((s) => s.id);
-        const compReports = allReports.filter((r) => studentIds.includes(r.user_id));
+        // Filter reports to only include this department's students
+        const studentIds = new Set(students.map((s) => s.id));
+        const deptReports = allReports.filter((r) => studentIds.has(r.user_id));
 
         // 3. Compute Metrics
         const pendingCount = students.filter((s) => s.company_status === 'pending').length;
@@ -90,17 +92,24 @@ function Overview({ onNavigate }) {
           totalInterns: students.length,
           pendingInterns: pendingCount,
           activeInterns: activeCount,
-          totalReports: compReports.length,
+          totalReports: deptReports.length,
+          totalCompanies: deptCompanies.length,
+          totalCapacity,
         });
 
         // 4. Compute Chart Data (Reports per week)
         const weekCounts = {};
-        compReports.forEach((r) => {
+        deptReports.forEach((r) => {
           const w = r.week_number ? `Week ${r.week_number}` : 'Other';
           weekCounts[w] = (weekCounts[w] || 0) + 1;
         });
 
-        const sortedWeeks = Object.keys(weekCounts).sort();
+        const sortedWeeks = Object.keys(weekCounts).sort((a, b) => {
+          const na = parseInt(a.replace(/\D/g, ''), 10);
+          const nb = parseInt(b.replace(/\D/g, ''), 10);
+          if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
+          return a.localeCompare(b);
+        });
         const formattedChartData = sortedWeeks.map((week) => ({
           week: week.replace('Week ', 'Wk '),
           count: weekCounts[week],
@@ -108,18 +117,29 @@ function Overview({ onNavigate }) {
         setChartData(formattedChartData);
 
         // 5. Format Active Roster
-        const activeStus = students.filter((s) => s.company_status === 'active').slice(0, 6);
+        const activeStus = students
+          .filter((s) => s.company_status === 'active')
+          .slice(0, 6)
+          .map((s) => ({
+            ...s,
+            companyName: companyById[String(s.company_id)]?.name || 'Partner Company',
+          }));
         setActiveRoster(activeStus);
 
         // 6. Format Recent Reports
-        const recent = compReports.slice(0, 5).map((r) => {
+        const recent = deptReports.slice(0, 5).map((r) => {
           const student = students.find((s) => s.id === r.user_id);
           return { ...r, student };
         });
         setRecentReports(recent);
 
         // 7. Format Pending Requests
-        const pending = students.filter((s) => s.company_status === 'pending');
+        const pending = students
+          .filter((s) => s.company_status === 'pending')
+          .map((s) => ({
+            ...s,
+            companyName: companyById[String(s.company_id)]?.name || 'Requested Company',
+          }));
         setPendingRequests(pending);
       }
     } catch (error) {
@@ -162,10 +182,10 @@ function Overview({ onNavigate }) {
     }
   };
 
-  // Capacity calculations
-  const totalSlots = companyData.capacity || 10;
+  // Capacity calculations across partner companies in this department
+  const totalSlots = metrics.totalCapacity;
   const assigned = metrics.activeInterns;
-  const assignedPercentage = Math.min(100, Math.round((assigned / totalSlots) * 100));
+  const assignedPercentage = totalSlots > 0 ? Math.min(100, Math.round((assigned / totalSlots) * 100)) : 0;
   const strokeDasharray = 283;
   const strokeDashoffset = strokeDasharray - (strokeDasharray * assignedPercentage) / 100;
 
@@ -177,7 +197,7 @@ function Overview({ onNavigate }) {
     );
   }
 
-  if (!hasCompany) {
+  if (!hasDepartment) {
     return (
       <div className="h-full flex flex-col items-center justify-center p-6 animate-fade-in w-full">
         <div className="p-8 rounded-xl border border-slate-200 bg-white text-center max-w-md shadow-xs">
@@ -186,15 +206,15 @@ function Overview({ onNavigate }) {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
           </div>
-          <h2 className="text-base font-semibold text-slate-900 mb-1.5">No Host Company Linked</h2>
+          <h2 className="text-base font-semibold text-slate-900 mb-1.5">No Department Assigned</h2>
           <p className="text-xs text-slate-500 leading-relaxed mb-4">
-            Your OJT coordinator account is not linked to a host company yet. You can register a partner company below or contact your school administrator.
+            Your OJT coordinator account is not assigned to a department yet. Set your department in Settings or contact your school administrator.
           </p>
           <button
-            onClick={() => onNavigate && onNavigate('Companies')}
+            onClick={() => onNavigate && onNavigate('Settings')}
             className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-colors cursor-pointer"
           >
-            Manage Host Companies
+            Open Settings
           </button>
         </div>
       </div>
@@ -205,7 +225,7 @@ function Overview({ onNavigate }) {
     {
       label: 'Active Interns',
       value: metrics.activeInterns,
-      note: `${assignedPercentage}% of company capacity filled`,
+      note: totalSlots > 0 ? `${assignedPercentage}% of ${department} slots filled` : 'No partner companies yet',
       accent: 'emerald',
       onClick: () => onNavigate && onNavigate('Intern Monitor'),
       icon: (
@@ -226,9 +246,9 @@ function Overview({ onNavigate }) {
       ),
     },
     {
-      label: 'Total Assigned',
+      label: 'Department Interns',
       value: metrics.totalInterns,
-      note: 'All interns allocated to company',
+      note: `Across ${metrics.totalCompanies} partner ${metrics.totalCompanies === 1 ? 'company' : 'companies'}`,
       accent: 'slate',
       onClick: () => onNavigate && onNavigate('List of Interns'),
       icon: (
@@ -260,7 +280,7 @@ function Overview({ onNavigate }) {
             {coordinatorName ? `Welcome back, ${coordinatorName}` : 'Coordinator Overview'}
           </h2>
           <p className="text-sm text-slate-500 mt-0.5">
-            Monitoring interns and reviewing weekly progress at <span className="font-medium text-slate-800">{companyData.name || 'Assigned Company'}</span>.
+            Monitoring <span className="font-medium text-slate-800">{department}</span> interns, partner placements, and weekly progress.
           </p>
         </div>
 
@@ -322,8 +342,8 @@ function Overview({ onNavigate }) {
         <div className="bg-white rounded-xl border border-slate-200/80 p-5 shadow-xs flex flex-col">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="text-sm font-semibold text-slate-900">Host Capacity</h3>
-              <p className="text-xs text-slate-500">Placement slots utilization</p>
+              <h3 className="text-sm font-semibold text-slate-900">Department Capacity</h3>
+              <p className="text-xs text-slate-500">{department} placement slots utilization</p>
             </div>
             <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
               {assigned} / {totalSlots} Slots
@@ -453,9 +473,12 @@ function Overview({ onNavigate }) {
                       <p className="text-xs font-semibold text-slate-900 truncate">
                         {req.first_name} {req.last_name}
                       </p>
-                      <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded border uppercase tracking-wider ${getDeptBadge(req.department)}`}>
-                        {req.department || 'BSIT'}
-                      </span>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded border uppercase tracking-wider shrink-0 ${getDeptBadge(req.department)}`}>
+                          {req.department || department}
+                        </span>
+                        <span className="text-[11px] text-slate-500 truncate">{req.companyName}</span>
+                      </div>
                     </div>
                   </div>
 
@@ -517,9 +540,12 @@ function Overview({ onNavigate }) {
                       <p className="text-xs font-medium text-slate-800 truncate">
                         {student.first_name} {student.last_name}
                       </p>
-                      <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded border uppercase tracking-wider ${getDeptBadge(student.department)}`}>
-                        {student.department || 'BSIT'}
-                      </span>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded border uppercase tracking-wider shrink-0 ${getDeptBadge(student.department)}`}>
+                          {student.department || department}
+                        </span>
+                        <span className="text-[10px] text-slate-500 truncate">{student.companyName}</span>
+                      </div>
                     </div>
                   </div>
                   <span className="flex items-center gap-1 text-[10px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full shrink-0">

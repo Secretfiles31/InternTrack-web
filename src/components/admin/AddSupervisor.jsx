@@ -18,7 +18,6 @@ function AddSupervisor({ onNavigate }) {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filterDept, setFilterDept] = useState('all');
-  const [filterStatus, setFilterStatus] = useState('all');
   const [showModalPassword, setShowModalPassword] = useState(false);
   const [feedback, setFeedback] = useState({ show: false, type: '', message: '' });
 
@@ -53,23 +52,14 @@ function AddSupervisor({ onNavigate }) {
       let adminDept = adminProfile ? adminProfile.department : '';
       setDepartment(adminDept);
 
-      // Fetch all supervisors across departments
+      // Fetch all OJT coordinators across departments
       const { data: supsData } = await supabase
         .from('profiles')
-        .select('id, first_name, last_name, username, department, role, company_id, avatar_url, created_at')
+        .select('id, first_name, last_name, username, department, role, avatar_url, created_at')
         .eq('role', 'supervisor')
         .order('created_at', { ascending: false });
 
-      const { data: compData } = await supabase
-        .from('companies')
-        .select('id, name, department');
-
-      const mappedSups = (supsData || []).map(sup => {
-        const comp = (compData || []).find(c => String(c.id) === String(sup.company_id));
-        return { ...sup, company_name: comp ? comp.name : 'Unassigned' };
-      });
-
-      setSupervisors(mappedSups);
+      setSupervisors(supsData || []);
     } catch (error) {
       console.error("Error:", error);
     } finally {
@@ -240,16 +230,22 @@ function AddSupervisor({ onNavigate }) {
     }
   };
 
+  const getDepartmentLabel = (deptCode) => {
+    const code = (deptCode || '').trim().toUpperCase();
+    return DEPARTMENT_OPTIONS.find((d) => d.value === code)?.label || deptCode || 'Unassigned';
+  };
+
   const filteredSupervisors = supervisors.filter(sup => {
+    const q = searchQuery.toLowerCase();
+    const deptLabel = getDepartmentLabel(sup.department).toLowerCase();
     const matchesSearch =
-      `${sup.first_name} ${sup.last_name}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (sup.username || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (sup.company_name || '').toLowerCase().includes(searchQuery.toLowerCase());
+      `${sup.first_name} ${sup.last_name}`.toLowerCase().includes(q) ||
+      (sup.username || '').toLowerCase().includes(q) ||
+      (sup.department || '').toLowerCase().includes(q) ||
+      deptLabel.includes(q);
 
     if (!matchesSearch) return false;
     if (filterDept !== 'all' && sup.department !== filterDept) return false;
-    if (filterStatus === 'assigned') return sup.company_name !== 'Unassigned';
-    if (filterStatus === 'unassigned') return sup.company_name === 'Unassigned';
     return true;
   });
 
@@ -285,7 +281,7 @@ function AddSupervisor({ onNavigate }) {
           </svg>
           <input
             type="text"
-            placeholder="Search by coordinator name, username, or partner..."
+            placeholder="Search by coordinator name, username, or department..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className={`w-full pl-9 pr-3 py-1.5 rounded-md text-xs font-normal outline-none border transition-colors ${isDarkMode ? 'bg-[#0f1914] border-emerald-900/30 text-white placeholder-slate-500' : 'bg-slate-50 border-slate-200 text-slate-800 placeholder-slate-400'
@@ -300,22 +296,12 @@ function AddSupervisor({ onNavigate }) {
             className={`px-2.5 py-1.5 rounded-md text-xs font-normal border outline-none ${isDarkMode ? 'bg-[#0f1914] border-emerald-900/30 text-white' : 'bg-slate-50 border-slate-200 text-slate-700'
               }`}
           >
-            <option value="all">All Programs</option>
-            <option value="BSHM">BSHM (HM)</option>
-            <option value="BSCRIM">BSCRIM (Crim)</option>
-            <option value="BSIT">BSIT (IT)</option>
-            <option value="BSAB">BSAB (Agre)</option>
-          </select>
-
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            className={`px-2.5 py-1.5 rounded-md text-xs font-normal border outline-none ${isDarkMode ? 'bg-[#0f1914] border-emerald-900/30 text-white' : 'bg-slate-50 border-slate-200 text-slate-700'
-              }`}
-          >
-            <option value="all">All Affiliations</option>
-            <option value="assigned">Assigned to Host</option>
-            <option value="unassigned">Unassigned</option>
+            <option value="all">All Departments</option>
+            {DEPARTMENT_OPTIONS.map((d) => (
+              <option key={d.value} value={d.value}>
+                {d.value} - {d.label}
+              </option>
+            ))}
           </select>
 
           {/* View Toggle */}
@@ -376,7 +362,8 @@ function AddSupervisor({ onNavigate }) {
         /* 1. GRID CARDS VIEW (MATCHING USER REFERENCE IMAGE) */
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filteredSupervisors.map((sup) => {
-            const isAssigned = sup.company_name !== 'Unassigned';
+            const deptCode = sup.department || 'BSIT';
+            const deptLabel = getDepartmentLabel(deptCode);
 
             return (
               <div
@@ -384,17 +371,13 @@ function AddSupervisor({ onNavigate }) {
                 className={`p-4 rounded-lg border ${bgCard} shadow-2xs flex flex-col justify-between transition-all ${isDarkMode ? 'hover:border-emerald-800' : 'hover:border-emerald-200'}`}
               >
                 <div>
-                  {/* Category Pill at top */}
+                  {/* Department Header */}
                   <div className="flex items-center justify-between gap-2 mb-3">
-                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border truncate max-w-[200px] ${isAssigned
-                        ? (isDarkMode ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/20' : 'bg-emerald-50 text-emerald-700 border-emerald-100')
-                        : (isDarkMode ? 'bg-amber-500/15 text-amber-300 border-amber-500/20' : 'bg-amber-50 text-amber-700 border-amber-200')
-                      }`}>
-                      {sup.company_name}
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded border uppercase shrink-0 ${getDepartmentBadge(deptCode)}`}>
+                      {deptCode}
                     </span>
-
-                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded border uppercase ${getDepartmentBadge(sup.department)}`}>
-                      {sup.department || 'BSIT'}
+                    <span className={`text-[11px] font-medium truncate ${textMuted}`} title={deptLabel}>
+                      {deptLabel}
                     </span>
                   </div>
 
@@ -466,14 +449,17 @@ function AddSupervisor({ onNavigate }) {
               <thead className={`border-b ${isDarkMode ? 'bg-[#15231b] border-emerald-900/30' : 'bg-slate-50 border-slate-200/80'}`}>
                 <tr>
                   <th className={`py-3 px-4 font-semibold ${textMuted}`}>OJT Coordinator</th>
-                  <th className={`py-3 px-4 font-semibold ${textMuted}`}>Assigned Host</th>
+                  <th className={`py-3 px-4 font-semibold ${textMuted}`}>Department</th>
                   <th className={`py-3 px-4 font-semibold ${textMuted}`}>Username</th>
                   <th className={`py-3 px-4 font-semibold ${textMuted}`}>Password</th>
                   <th className={`py-3 px-4 font-semibold text-right ${textMuted}`}>Actions</th>
                 </tr>
               </thead>
               <tbody className={`divide-y ${isDarkMode ? 'divide-emerald-950/40' : 'divide-slate-100'}`}>
-                {filteredSupervisors.map((sup) => (
+                {filteredSupervisors.map((sup) => {
+                  const deptCode = sup.department || 'BSIT';
+                  const deptLabel = getDepartmentLabel(deptCode);
+                  return (
                   <tr key={sup.id} className="hover:bg-slate-50/70 dark:hover:bg-white/5 transition-colors">
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-3">
@@ -486,16 +472,17 @@ function AddSupervisor({ onNavigate }) {
                         )}
                         <div>
                           <span className={`font-bold block ${textMain}`}>{sup.first_name} {sup.last_name}</span>
-                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border uppercase inline-block mt-0.5 ${getDepartmentBadge(sup.department)}`}>
-                            {sup.department || 'BSIT'}
-                          </span>
+                          <span className="text-[11px] text-slate-400">OJT Coordinator</span>
                         </div>
                       </div>
                     </td>
                     <td className="py-3 px-4">
-                      <span className={`font-medium ${sup.company_name === 'Unassigned' ? 'text-amber-600 italic' : textMain}`}>
-                        {sup.company_name}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border uppercase ${getDepartmentBadge(deptCode)}`}>
+                          {deptCode}
+                        </span>
+                        <span className={`font-medium ${textMain}`}>{deptLabel}</span>
+                      </div>
                     </td>
                     <td className="py-3 px-4 font-mono">{sup.username}</td>
                     <td className="py-3 px-4">
@@ -512,7 +499,8 @@ function AddSupervisor({ onNavigate }) {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
