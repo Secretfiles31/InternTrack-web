@@ -6,6 +6,7 @@ import Overview from './Overview';
 import InternMonitor from './InternMonitor';
 import Company from './Company';
 import ListStudents from './ListStudents';
+import Approvals from './Approvals';
 import InternJournals from './InternJournals'; 
 import AnnouncementsManager from '../shared/AnnouncementsManager';
 import Settings from './Settings'; 
@@ -14,6 +15,7 @@ const PAGE_TITLES = {
   Dashboard: 'Dashboard',
   'Intern Monitor': 'Intern Monitor',
   Companies: 'Partner Companies',
+  Approvals: 'Placement Approvals',
   'List of Interns': 'Students',
   Journals: 'Progress Reports',
   'Student Report': 'Progress Reports',
@@ -163,6 +165,7 @@ function CoordinatorDash() {
             {activeTab === 'Dashboard' && <Overview onNavigate={handleNavigate} />}
             {activeTab === 'Intern Monitor' && <InternMonitor onNavigate={handleNavigate} initialFilter={monitorFilter} />}
             {activeTab === 'Companies' && <Company onNavigate={handleNavigate} />}
+            {activeTab === 'Approvals' && <Approvals onNavigate={handleNavigate} />}
             {activeTab === 'List of Interns' && <ListStudents onNavigate={handleNavigate} />}
             {(activeTab === 'Journals' || activeTab === 'Student Report') && (
               <InternJournals onNavigate={handleNavigate} initialSearch={reportSearch} />

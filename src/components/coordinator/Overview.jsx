@@ -239,6 +239,7 @@ function Overview({ onNavigate }) {
       value: metrics.pendingInterns,
       note: metrics.pendingInterns > 0 ? 'Action required in queue' : 'All applications reviewed',
       warn: metrics.pendingInterns > 0,
+      onClick: () => onNavigate && onNavigate('Approvals'),
       icon: (
         <svg className={`w-4 h-4 ${metrics.pendingInterns > 0 ? 'text-amber-600' : 'text-slate-400'}`} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -446,7 +447,12 @@ function Overview({ onNavigate }) {
                 </span>
               )}
             </div>
-            <span className="text-[11px] text-slate-400">Review queue</span>
+            <button
+              onClick={() => onNavigate && onNavigate('Approvals')}
+              className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer"
+            >
+              Manage &rarr;
+            </button>
           </div>
 
           <div className="flex flex-col gap-2.5 flex-1">
