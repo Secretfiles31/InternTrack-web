@@ -263,12 +263,6 @@ function Login() {
             </div>
             
           </form>
-
-          <div className="mt-8 text-center">
-            <p className="text-sm text-gray-500">
-              Don't have an account? <Link to="/sign" className="font-bold text-green-600 hover:text-green-700 hover:underline transition-colors">Sign up</Link>
-            </p>
-          </div>
         </div>
       </div>
 

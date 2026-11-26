@@ -1,9 +1,8 @@
 import { Suspense, lazy } from 'react';
-import { HashRouter, Routes, Route } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ToastProvider } from './components/common/ToastProvider';
 
 const Landing = lazy(() => import('./Pages/Landing'));
-const Sign = lazy(() => import('./Pages/Sign'));
 const Login = lazy(() => import('./Pages/Login'));
 const Dashboard = lazy(() => import('./Pages/Dashboard'));
 const DashAdmin = lazy(() => import('./components/admin/DashAdmin'));
@@ -24,7 +23,7 @@ function App() {
         <Suspense fallback={<RouteFallback />}>
           <Routes>
             <Route path="/" element={<Landing />} />
-            <Route path="/sign" element={<Sign />} />
+            <Route path="/sign" element={<Navigate to="/login" replace />} />
             <Route path="/login" element={<Login />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/admin-dashboard" element={<DashAdmin />} />

@@ -157,7 +157,7 @@ function Landing() {
               </p>
 
               <div className="mt-8">
-                <Link to="/sign">
+                <Link to="/login">
                   <button className="px-8 py-3.5 bg-white text-green-700 rounded-lg hover:bg-green-50 transition-colors shadow-xl font-bold text-lg focus:outline-none focus:ring-4 focus:ring-green-500/50">
                     Sign in
                   </button>
